@@ -1,0 +1,349 @@
+---
+title: " Estadisticas policiales de los cantones de Costa Rica Rebe"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    theme:
+      version: 3
+      bootswatch: cosmo
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+```
+
+
+```{r paquetes}
+library(dplyr)
+library(sf)
+library(leaflet)
+library(DT)
+library(shiny)
+library(ggplot2)
+library(plotly)
+library(readxl)
+library(readr)
+library(lubridate)
+library(terra)
+library(stringi)
+```
+
+```{r lectura de datos}
+cantones <-
+  st_read(dsn = "D:/Procesamiento de datos/Tablero de control estadistas policiales/cantones_simplificados.geojson", quiet = TRUE) %>%
+  st_transform(4326)
+
+```
+
+```{r lectura de datos policales,  message = FALSE}
+delitos <-
+  readxl::read_excel("D:/Procesamiento de datos/Datos policiales 2021 tarea 2/estadisticaspoliciales2021.xls")
+```
+
+
+```{r lista-provincias}
+# Lista ordenada de provincias + "Todas"
+lista_provincias <- unique(cantones$provincia)
+lista_provincias <- sort(lista_provincias)
+lista_provincias <- c("Todas", lista_provincias)
+```
+
+
+Datos 
+=======================================================================
+
+Column {.sidebar}
+-------------------------------------
+
+```{r}
+# Provincia
+selectInput(
+  inputId = "provincia",
+  label = "Provincia",
+  choices = lista_provincias,
+  selected = "Todos"
+)
+# Área
+sliderInput(
+  "area",
+  label = "Área (km2)",
+  min = floor(min(cantones$area)),
+  max = ceiling(max(cantones$area)),
+  value = c(floor(min(cantones$area)), ceiling(max(cantones$area)))
+)
+# Función para filtrar los datos con base en los controles de entrada
+filtrarCantones <- reactive({
+  # Valor inicial del objeto que va a retornarse
+  cantones_filtrados <- cantones
+  
+  # Filtrado de cantones por provincia
+  if (input$provincia != "Todas") {
+    cantones_filtrados <-
+      cantones_filtrados %>%
+      filter(provincia == input$provincia)
+  }
+  
+  # Filtrado de cantones por área
+  cantones_filtrados <-
+    cantones_filtrados %>%
+    filter(area >= input$area[1] & area <= input$area[2])
+  
+  return(cantones_filtrados)
+})
+```
+
+
+Row {data-height=15}
+-----------------------------------------------------------------------
+
+### **Fuente de los datos: [Instituto Geográfico Nacional (IGN)](http://geos.snitcr.go.cr/be/IGN_5/wfs)**
+
+Row {data-height=500}
+-----------------------------------------------------------------------
+
+### Mapa
+```{r}
+# Normalización de los nombres de cantones
+
+# En el data frame de cantones
+cantones <-
+  cantones %>%
+  mutate(canton_normalizado = tolower(stri_trans_general(canton, id = "Latin-ASCII")))
+
+# En el data frame de delitos
+delitos <-
+  delitos %>%
+  mutate(canton_normalizado = tolower(stri_trans_general(Canton, id = "Latin-ASCII")))
+```
+
+
+```{r, message = FALSE}
+# Corrección de nombres de cantones en delitos
+delitos <-
+  delitos %>%
+  mutate(Canton = if_else(Canton == "LEON CORTES", "LEON CORTES CASTRO", Canton)) %>%
+  mutate(Canton = if_else(Canton == "VASQUEZ DE CORONADO", "VAZQUEZ DE CORONADO", Canton))
+
+# Se realiza nuevamente esta operación para reflejar los cambios en los nombres de cantones
+delitos <-
+  delitos %>%
+  mutate(canton_normalizado = tolower(stri_trans_general(Canton, id = "Latin-ASCII")))
+
+# Revisión
+delitos %>%
+  left_join(
+    dplyr::select(st_drop_geometry(cantones),
+                  canton_normalizado, cod_canton),
+    by = "canton_normalizado",
+    copy = FALSE,
+    keep = FALSE
+  ) %>%
+  filter(is.na(cod_canton) & canton_normalizado != "desconocido")  
+
+```
+
+
+```{r, message = FALSE}
+# Unión del código de cantón a delitos
+delitos <-
+  delitos %>%
+  left_join(
+    dplyr::select(
+      st_drop_geometry(cantones),
+      cod_canton,
+      canton_normalizado
+    ),
+    by = "canton_normalizado",
+    copy = FALSE,
+    keep = FALSE
+  )
+```
+
+
+
+```{r, message = FALSE}
+# Conteo de registros por código de cantón
+delitos_x_canton <-
+  delitos %>%
+  count(cod_canton, name = "delitos")
+
+# Unión de cantidad de delitos por cantón a cantones
+cantones_delitos <-
+  cantones %>%
+  left_join(
+    delitos_x_canton,
+    by = "cod_canton",
+    copy = FALSE,
+    keep = FALSE
+  )
+```
+
+
+```{r}
+
+# Paleta de colores para los mapas
+colores_cantones_delitos <-
+  colorNumeric(palette = "Reds",
+               domain = cantones_delitos$delitos,
+               na.color = "transparent")
+
+# Mapa leaflet de delitos en cantones
+
+renderLeaflet({
+  cantones <- filtrarCantones()
+leaflet() %>%
+  setView(# centro y nivel inicial de acercamiento
+    lng = -84.19452,
+    lat = 9.572735,
+    zoom = 7) %>%
+  addTiles(group = "OpenStreetMap") %>% # capa base
+  addPolygons(
+    # capa de polígonos
+    data = cantones_delitos,
+    fillColor = ~ colores_cantones_delitos(cantones_delitos$delitos),
+    fillOpacity = 0.8,
+    color = "black",
+    stroke = TRUE,
+    weight = 1.0,
+    popup = paste(
+      # ventana emergente
+      paste(
+        "<strong>Cantón:</strong>",
+        cantones_delitos$canton
+      ),
+      paste(
+        "<strong>Delitos:</strong>",
+        cantones_delitos$delitos
+      ),
+      sep = '<br/>'
+    ),
+    group = "Delitos en cantones"
+  ) %>%
+  addLayersControl(
+    # control de capas
+    baseGroups = c("OpenStreetMap"),
+    overlayGroups = c("Delitos en cantones")
+  ) %>%
+  addLegend(
+    # leyenda
+    position = "bottomleft",
+    pal = colores_cantones_delitos,
+    values = cantones_delitos$delitos,
+    group = "Delitos",
+    title = "Cantidad de delitos"
+  )})
+
+```
+
+
+### Tabla de datos
+```{r tabla,  message = FALSE }
+delitos %>%
+  dplyr::select(Delito, Fecha, Victima, Edad, Genero, Provincia, Canton) %>%
+  datatable(colnames = c(
+    "Delito",
+    "Fecha",
+    "Víctima",
+    "Edad",
+    "Género",
+    "Provincia",
+    "Cantón"
+  ),
+options = list(
+  language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+))
+```
+
+Gráfico 1 y 2 
+=======================================================================
+
+
+Row {data-height=500}
+-----------------------------------------------------------------------
+
+### Grafico 1: Cantidad de delitos por tipo de delito 
+
+```{r grafico 1, message = FALSE  }
+# Cantidad de delitos por tipo de delito
+ggplot2_delitos <-
+delitos %>%
+  count(Delito) %>%
+  ggplot(aes(x = reorder(Delito, n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  ggtitle("Cantidad de delitos por tipo de delito") +
+  xlab("Delito") +
+  ylab("Cantidad de delitos") +
+  theme_gray() 
+ggplotly(ggplot2_delitos) %>% config(locale = 'es')
+```
+
+
+### Grafico 2: Cantidad de delitos por victima
+
+```{r grafico 2, message = FALSE  }
+# Cantidad de delitos por victima
+ggplot2_delitos <-
+delitos %>%
+  count(Victima) %>%
+  ggplot(aes(x = reorder(Victima, n), y = n)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  ggtitle("Cantidad de delitos por víctima") +
+  xlab("Víctima") +
+  ylab("Cantidad de delitos") +
+  theme_gray() 
+ggplotly(ggplot2_delitos) %>% config(locale = 'es')
+```
+
+Gráfico 3 y 4 
+=======================================================================
+
+Row {data-height=500}
+-----------------------------------------------------------------------
+
+### Grafico 3: Cantidad de delitos por mes del año
+
+```{r ,message = FALSE}
+datos <-
+  delitos %>%
+  mutate(meses = lubridate::month(Fecha))
+
+mes <-c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Setiembre", "Octubre", "Noviembre")
+
+grafico_delitos_meses <-
+  datos %>%
+  count(meses) %>%
+  ggplot(level = level_order, (aes(x = reorder (mes, meses), y = n))) +
+  geom_bar(stat = "identity") +
+  ggtitle("Cantidad de delitos por mes del año 2021") +
+  xlab("Mes") +
+  ylab("Cantidad de delitos") +
+  coord_flip() +
+  theme_gray() 
+  
+ggplotly(grafico_delitos_meses) %>% config(locale = 'es')
+```
+
+### Grafico 4 : Cantidad de delitos por genero  
+
+```{r , message = FALSE}
+delitos_genero <-
+  delitos %>%
+  ggplot(aes(x = Delito, fill = Genero)) +
+  geom_bar(position = "fill") +
+  ggtitle("Cantidad de delitos por género") +
+  xlab("Delito") +
+  ylab("Cantidad de delitos") +
+  labs(fill = "Género") +
+  coord_flip() +
+  theme_get()
+
+ggplotly(delitos_genero) %>% config(locale = 'es')
+```
+
+
+
+
+
