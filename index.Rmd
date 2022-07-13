@@ -1,12 +1,10 @@
 ---
-title: " Estadisticas policiales de los cantones de Costa Rica Rebe"
+title: " Estadisticas policiales de los cantones de Costa Rica "
+author: "Rebeca Céspedes Serrano y María Sofía Moya Bonilla"
 output: 
   flexdashboard::flex_dashboard:
+    code_folding: hide
     orientation: rows
-    theme:
-      version: 3
-      bootswatch: cosmo
-runtime: shiny
 ---
 
 ```{r setup, include=FALSE}
@@ -19,7 +17,6 @@ library(dplyr)
 library(sf)
 library(leaflet)
 library(DT)
-library(shiny)
 library(ggplot2)
 library(plotly)
 library(readxl)
@@ -42,68 +39,22 @@ delitos <-
 ```
 
 
-```{r lista-provincias}
-# Lista ordenada de provincias + "Todas"
-lista_provincias <- unique(cantones$provincia)
-lista_provincias <- sort(lista_provincias)
-lista_provincias <- c("Todas", lista_provincias)
-```
-
 
 Datos 
 =======================================================================
-
-Column {.sidebar}
--------------------------------------
-
-```{r}
-# Provincia
-selectInput(
-  inputId = "provincia",
-  label = "Provincia",
-  choices = lista_provincias,
-  selected = "Todos"
-)
-# Área
-sliderInput(
-  "area",
-  label = "Área (km2)",
-  min = floor(min(cantones$area)),
-  max = ceiling(max(cantones$area)),
-  value = c(floor(min(cantones$area)), ceiling(max(cantones$area)))
-)
-# Función para filtrar los datos con base en los controles de entrada
-filtrarCantones <- reactive({
-  # Valor inicial del objeto que va a retornarse
-  cantones_filtrados <- cantones
-  
-  # Filtrado de cantones por provincia
-  if (input$provincia != "Todas") {
-    cantones_filtrados <-
-      cantones_filtrados %>%
-      filter(provincia == input$provincia)
-  }
-  
-  # Filtrado de cantones por área
-  cantones_filtrados <-
-    cantones_filtrados %>%
-    filter(area >= input$area[1] & area <= input$area[2])
-  
-  return(cantones_filtrados)
-})
-```
 
 
 Row {data-height=15}
 -----------------------------------------------------------------------
 
-### **Fuente de los datos: [Instituto Geográfico Nacional (IGN)](http://geos.snitcr.go.cr/be/IGN_5/wfs)**
+### **Fuente de los datos: [Instituto Geográfico Nacional (IGN)](http://geos.snitcr.go.cr/be/IGN_5/wfs),  [Organismo de Investigación Judicial(OIJ)](https://sitiooij.poder-judicial.go.cr/) **
 
 Row {data-height=500}
 -----------------------------------------------------------------------
 
 ### Mapa
-```{r}
+
+```{r, message=FALSE}
 # Normalización de los nombres de cantones
 
 # En el data frame de cantones
@@ -118,7 +69,27 @@ delitos <-
 ```
 
 
-```{r, message = FALSE}
+
+```{r, message=FALSE}
+delitos %>%
+  left_join(
+    dplyr::select(st_drop_geometry(cantones),
+                  canton_normalizado, cod_canton),
+    by = "canton_normalizado",
+    copy = FALSE,
+    keep = FALSE
+  ) %>%
+  filter(is.na(cod_canton) & canton_normalizado != "desconocido") %>% # los cod_canton = NA son los que no están en el data frame de cantones
+  distinct(canton_normalizado) # se despliegan solo los nombres de cantones diferentes
+#> # A tibble: 2 × 1
+#>   canton_normalizado 
+#>   <chr>              
+#> 1 leon cortes        
+#> 2 vasquez de coronado
+```
+
+
+```{r, message=FALSE}
 # Corrección de nombres de cantones en delitos
 delitos <-
   delitos %>%
@@ -139,12 +110,13 @@ delitos %>%
     copy = FALSE,
     keep = FALSE
   ) %>%
-  filter(is.na(cod_canton) & canton_normalizado != "desconocido")  
-
+  filter(is.na(cod_canton) & canton_normalizado != "desconocido") %>% # los cod_canton = NA son los que no están en el data frame de cantones
+  distinct(canton_normalizado) # se despliegan solo los nombres de cantones diferentes
+#> # A tibble: 0 × 1
+#> # … with 1 variable: canton_normalizado <chr>
 ```
 
-
-```{r, message = FALSE}
+```{r, message=FALSE}
 # Unión del código de cantón a delitos
 delitos <-
   delitos %>%
@@ -161,8 +133,7 @@ delitos <-
 ```
 
 
-
-```{r, message = FALSE}
+```{r, message=FALSE}
 # Conteo de registros por código de cantón
 delitos_x_canton <-
   delitos %>%
@@ -177,21 +148,19 @@ cantones_delitos <-
     copy = FALSE,
     keep = FALSE
   )
+
 ```
 
-
-```{r}
-
+```{r, message=FALSE}
 # Paleta de colores para los mapas
 colores_cantones_delitos <-
-  colorNumeric(palette = "Reds",
+  colorNumeric(palette = "Purples",
                domain = cantones_delitos$delitos,
                na.color = "transparent")
+```
 
+```{r, message=FALSE}
 # Mapa leaflet de delitos en cantones
-
-renderLeaflet({
-  cantones <- filtrarCantones()
 leaflet() %>%
   setView(# centro y nivel inicial de acercamiento
     lng = -84.19452,
@@ -232,9 +201,9 @@ leaflet() %>%
     values = cantones_delitos$delitos,
     group = "Delitos",
     title = "Cantidad de delitos"
-  )})
-
+  )
 ```
+
 
 
 ### Tabla de datos
